@@ -1,0 +1,202 @@
+// Modified for the BIOBUZZ Edition (FTC 2026-2027); based on Pedro-Pathing/Visualizer f54357e.
+import type { Point, Line, Shape, SequenceItem, PathChain, Settings } from "../types";
+
+/**
+ * File save/load utilities for the visualizer
+ */
+
+export interface SaveData {
+  startPoint: Point;
+  lines: Line[];
+  shapes?: Shape[];
+  settings?: any;
+  sequence?: SequenceItem[];
+  pathChains?: PathChain[];
+  version?: string;
+  timestamp?: string;
+}
+
+/** .pp file-format version written by every save path (App.svelte uses the same). */
+export const PP_FILE_VERSION = "1.2.1";
+
+/**
+ * Download trajectory data as a .pp file.
+ *
+ * Writes the same shape as App.svelte's saveFile()/saveFileAs(): path data,
+ * settings (robot size, motion limits, …) when given, plus version and
+ * timestamp. Display-only settings in a loaded file are ignored by
+ * mergeFileSettings(), so including them here is harmless.
+ */
+export function downloadTrajectory(
+  startPoint: Point,
+  lines: Line[],
+  shapes: Shape[],
+  sequence?: SequenceItem[],
+  pathChains?: PathChain[],
+  settings?: Settings,
+  fileName = "trajectory.pp",
+): void {
+  const data: SaveData = {
+    startPoint,
+    lines,
+    shapes,
+    sequence,
+    pathChains,
+    ...(settings ? { settings } : {}),
+    version: PP_FILE_VERSION,
+    timestamp: new Date().toISOString(),
+  };
+  const jsonString = JSON.stringify(data, null, 2);
+  const blob = new Blob([jsonString], { type: "application/json" });
+  const linkObj = document.createElement("a");
+  const url = URL.createObjectURL(blob);
+
+  linkObj.href = url;
+  linkObj.download = /\.pp$/i.test(fileName) ? fileName : `${fileName}.pp`;
+
+  document.body.appendChild(linkObj);
+  linkObj.click();
+  document.body.removeChild(linkObj);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Load trajectory from a file input event
+ */
+export function loadTrajectoryFromFile(
+  evt: Event,
+  onSuccess: (data: SaveData) => void,
+  onError?: (error: Error) => void,
+): void {
+  const elem = evt.target as HTMLInputElement;
+  const file = elem.files?.[0];
+
+  if (!file) return;
+
+  // Check file extension
+  if (!file.name.toLowerCase().endsWith(".pp")) {
+    const error = new Error("Please select a .pp file");
+    if (onError) onError(error);
+    alert(error.message);
+    return;
+  }
+
+  if (file) {
+    const reader = new FileReader();
+
+    reader.onload = function (e: ProgressEvent<FileReader>) {
+      try {
+        const result = e.target?.result as string;
+        const jsonObj = JSON.parse(result) as SaveData;
+        onSuccess(jsonObj);
+      } catch (err) {
+        // The caller reports a bad file to the user; only log otherwise.
+        if (onError) onError(err as Error);
+        else console.error(err);
+      }
+    };
+
+    reader.readAsText(file);
+  }
+}
+
+/**
+ * Update the robot image displayed on the canvas
+ */
+export function updateRobotImageDisplay(): void {
+  const robotImage = document.querySelector(
+    'img[alt="Robot"]',
+  ) as HTMLImageElement;
+  const storedImage = localStorage.getItem("robot.png");
+  if (robotImage && storedImage) {
+    robotImage.src = storedImage;
+  }
+}
+
+/**
+ * Convert image file to base64 string
+ */
+export function imageToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+      } else {
+        reject(new Error("Failed to convert image to base64"));
+      }
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Load robot image from a file input event
+ */
+export async function loadRobotImage(
+  file: File,
+  onSuccess?: (imageData: string) => void,
+  onError?: (error: Error) => void,
+): Promise<string | null> {
+  try {
+    // Check file type
+    if (!file.type.match(/^image\/(png|jpeg|jpg|gif)$/)) {
+      throw new Error("Please upload a PNG, JPEG, or GIF image.");
+    }
+
+    // Convert to base64
+    const base64Data = await imageToBase64(file);
+
+    // Compress if needed (optional)
+    const compressedData = await compressImage(base64Data, 100, 100); // Max 100x100
+
+    if (onSuccess) {
+      onSuccess(compressedData);
+    }
+
+    return compressedData;
+  } catch (error) {
+    console.error("Error loading robot image:", error);
+    if (onError) {
+      onError(error as Error);
+    }
+    return null;
+  }
+}
+
+/**
+ * Compress image data
+ */
+async function compressImage(
+  base64Data: string,
+  maxWidth: number,
+  maxHeight: number,
+): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      let width = img.width;
+      let height = img.height;
+
+      // Calculate new dimensions
+      if (width > maxWidth || height > maxHeight) {
+        const ratio = Math.min(maxWidth / width, maxHeight / height);
+        width = Math.floor(width * ratio);
+        height = Math.floor(height * ratio);
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/png", 0.8)); // 80% quality
+      } else {
+        resolve(base64Data);
+      }
+    };
+    img.src = base64Data;
+  });
+}
